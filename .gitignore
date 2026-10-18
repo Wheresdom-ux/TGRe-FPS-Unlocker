@@ -1,0 +1,6 @@
+.vs/
+build/
+backups/
+install-state.json
+install-state.json
+*.log
