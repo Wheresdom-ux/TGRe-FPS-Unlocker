@@ -1,16 +1,42 @@
-# CALL to EXIST FPS proxy 1.3
+# CALL to EXIST FPS Unlocker
 
-The installed `winmm.dll` proxy unlocks the game's internal 60 FPS scheduler. **Launch the game through Steam.** No injector, Cheat Engine table or model viewer is required.
+An FPS unlocker for **CALL to EXIST** on Steam. The game's internal scheduler is locked to 60 FPS; this tool lifts that limit and lets you choose your own frame rate, with a small in-game panel to change settings live.
 
-The default target is **144 FPS**. The tested Steam-launched session measured approximately 143–144 FPS, while retaining the game's nominal clock of 60 and a normalization of 60 simulation units per real second. The ModelRipper proxy has been removed; the overlay is built into this WINMM proxy.
+The game's executable is never modified. The tool is a drop-in `winmm.dll` proxy that the game loads on startup.
 
-Version 1.2 fixes dropped input by queuing window messages independently of rendering and polling mouse/key state as a fallback. Keyboard modifier states are captured with each event so quick shortcuts remain ordered. Mouse coordinates are mapped to the actual backbuffer after window resizing. A GPU-rendered red circle cursor with a white outline appears while hovering or dragging the panel, and disappears when the panel is closed or the mouse leaves it.
+## Features
 
-Version 1.3 refreshes the interface with Segoe UI, larger performance readings, selected-preset highlighting, grouped controls, and collapsible Diagnostics. The circle cursor is retained. Fonts load from the Windows Fonts folder, with Tahoma and a readable built-in font as fallbacks; Windows font files are not redistributed. The panel height is constrained to the display, with scrolling for smaller windows.
+- Unlocks the game's 60 FPS cap. The default target is **144 FPS**, and you can set any value from 1 to 1000, or 0 for uncapped.
+- Optional **VSync removal**. This only changes how the game presents frames; your monitor's refresh rate and driver settings are not touched.
+- **In-game settings panel** (press **F10** to show or hide) with presets (60 / 144 / 240 / 360), a custom FPS box, an Unlimited toggle, a VSync toggle, an FPS counter and logging toggle.
+- **Save settings** writes your choices to the INI so they apply on the next launch. **Reload saved** re-reads the INI without restarting.
+- Optional on-screen FPS counter and a diagnostic log (`CTE_FPSPatch.log`) that records measured FPS every five seconds.
+- The game's simulation clock stays at its nominal 60, so game speed is unchanged. In testing, the measured rate was about 143-144 FPS at the 144 FPS target.
+
+## Installation
+
+1. Place this folder directly inside your CALL to EXIST game folder, next to `CALL to EXIST.exe`.
+2. Build `winmm.dll` (see [Building](#building)).
+3. Close the game, then run `Install.ps1` from PowerShell in this folder. It copies `winmm.dll` and `CTE_FPSPatch.ini` into the game folder.
+4. **Launch the game through Steam.**
+
+You can also install manually by copying `build/winmm.dll` and `CTE_FPSPatch.ini` into the game folder.
+
+`Install.ps1` refuses to run while the game is open and refuses to overwrite a different `winmm.dll` (for example, one from another mod). It verifies its own installed DLL by hash before replacing it, keeps old copies in `backups/`, and never overwrites an existing INI.
+
+### Uninstalling
+
+Close the game and run this from PowerShell in this folder:
+
+```powershell
+.\Install.ps1 -Uninstall
+```
+
+This moves the hash-verified `winmm.dll` out of the game folder. Your settings and logs are kept. You can also just remove that `winmm.dll` by hand while the game is closed.
 
 ## Configuration
 
-Press **F10** in the game to show or hide the Dear ImGui panel. Change the cap using a preset, or enter a custom value and press **Apply** / Enter. **Unlimited**, **VSync**, the FPS counter and measurement logging can all be changed without restarting. Click **Save settings** to keep the settings for the next launch. **Reload saved** applies the INI file immediately if you edit it externally.
+Press **F10** in game for the live panel, or edit `CTE_FPSPatch.ini` in the game folder:
 
 ```ini
 [FPS]
@@ -18,68 +44,54 @@ Enabled=1
 MaxFPS=144
 DisableVSync=1
 LogMeasurements=1
+
 [Overlay]
 ShowFPS=1
 OpenAtLaunch=1
 ```
 
-* `MaxFPS` accepts 1 through 1000, or 0 for uncapped. Actual FPS depends on hardware, scene complexity and driver limits.
-* `DisableVSync=1` requests Present sync interval 0. Setting it to 0 (Use VSync checked) requests interval 1. No driver or monitor settings are changed.
-* `Enabled=0` switches the owned scheduler to a 60 FPS limit and restores the game's requested presentation sync. The panel remains available so you can enable the unlock again live. Uninstalling restores the original scheduler on the next launch.
-* Logging records measured presentation rate and the unchanged simulation clock every five seconds in `CTE_FPSPatch.log`.
-* `ShowFPS` controls the small HUD. `OpenAtLaunch` controls whether the panel starts visible; F10 always opens it.
+| Setting | Meaning |
+| --- | --- |
+| `Enabled` | `1` unlocks the FPS cap. `0` returns to a 60 FPS limit and restores the game's own VSync behavior. The panel stays available so you can turn the unlock back on. |
+| `MaxFPS` | Target frame rate, 1 to 1000, or `0` for uncapped. Actual FPS still depends on your hardware and the scene. |
+| `DisableVSync` | `1` removes the VSync wait. `0` keeps VSync on. |
+| `LogMeasurements` | Writes measured FPS to `CTE_FPSPatch.log` every five seconds. |
+| `ShowFPS` | Shows the small FPS counter in the corner. |
+| `OpenAtLaunch` | Whether the panel is visible at startup. F10 always toggles it. |
 
-The panel does not pause gameplay. Use it in a menu or while paused. Mouse/keyboard input over the panel is captured when available; game controllers and direct input polling can still reach the game.
+The panel does not pause the game, so it is best used in a menu or while paused.
 
-The INI supplied in this project folder is the installation default. After installation, use the copy in the main game folder.
+## How it works
 
-## Installation and removal
+- **Loading:** Windows loads the proxy `winmm.dll` in place of the system one. It forwards all 181 of the real WINMM exports (names and ordinals) to the genuine library in System32, so audio and timer calls behave normally. No Windows DLL is replaced or redistributed.
+- **Safety checks:** on the first WINMM call it verifies the game executable's identity, x64 architecture, build timestamp, image size and five separate code signatures. If anything doesn't match, the game is left unpatched and WINMM calls simply pass through.
+- **Unlocking the cap:** it replaces only the six-byte scheduler wait branch, in memory. It then paces the scheduler using your target FPS, a high-resolution waitable timer and a short final spin. The counter still returns real operating-system time, and other timing callers are unaffected.
+- **VSync and measurement:** the game's swapchain `Present` call is hooked to remove the VSync wait when requested and to measure the real presentation rate. The original function stays in the call chain.
+- **Overlay:** the panel is drawn with Dear ImGui through the game's own Direct3D 11 device. Render state is restored afterwards and backbuffer references are released before each `Present` so window resizing keeps working.
 
-Place this project folder directly inside the CALL to EXIST game folder (next to `CALL to EXIST.exe`). To install, close the game and copy `build/winmm.dll` and `CTE_FPSPatch.ini` into the main game folder. No `d3d11.dll` proxy is needed. Do not overwrite a different WINMM proxy from another mod.
+## Compatibility and limits
 
-Alternatively, run `Install.ps1` from PowerShell. It refuses a running game or an unrelated existing `winmm.dll`. It checks its own installed DLL's hash before moving or replacing it and keeps old patch binaries in `backups/`. It does not overwrite existing INI settings.
+- Validated against one game build: executable build timestamp `5DF36448`, SHA256 `57c866f551b86622e107ceeac7346519a2ffec252804bedbc292bfa5921ab4ea`. Both measured image layouts (sizes `0xC7F000` and `0xCAC000`) are recognized only if every code signature matches.
+- A game update may change the code and require the patch to be updated.
+- Tested through Steam: the panel, FPS presets, custom values, uncapped mode, VSync on/off, live enable/disable, saving and reloading settings. The simulation clock stayed at its nominal rate.
+- Not tested: every combat mechanic, cutscene and multiplayer mode, so frame-rate-dependent behavior there is unverified. Fullscreen and device-loss stress cases were also not tested.
+- Other mods that replace the same scheduler code or the same Direct3D entry points can conflict with this one.
+- This is an unofficial community tool, not affiliated with the game's developers. Use it at your own risk.
 
-To uninstall, close the game and run this from PowerShell inside this folder:
+## Building
 
-```powershell
-& '.\Install.ps1' -Uninstall
-```
+Run `build.cmd` with Visual Studio's **Desktop development with C++** tools installed. It finds the x64 MSVC and MASM environment, compiles the sources with warnings treated as errors, and produces `build/winmm.dll`.
 
-This moves this patch's hash-verified DLL out of the game folder. Settings and logs are retained. You can also move this specific `winmm.dll` out manually while the game is closed. Restarting without it restores the original in-memory scheduler code.
+| Path | Contents |
+| --- | --- |
+| `src/` | Patch and overlay sources, export definitions and assembly forwarding stubs |
+| `third_party/imgui/` | Vendored Dear ImGui (with its Win32 and D3D11 backends) |
+| `build.cmd` | Build script |
+| `Install.ps1` | Install and uninstall script |
+| `CTE_FPSPatch.ini` | Default settings |
 
-## What changes
+No third-party hooking library is used.
 
-The executable file is never edited. On the first WINMM call, the proxy checks the executable's identity, x64 architecture, build timestamp, image size and five separate timing/graphics code signatures. Unsupported or already-modified timing code is left unpatched; system WINMM calls still pass through.
+## Credits
 
-For the validated build, it replaces only the six-byte scheduler wait branch in process memory. It then paces the scheduler's own QueryPerformanceCounter call using the selected target, a high-resolution waitable timer and a short final spin. The counter still returns the **real operating-system time**. Other QueryPerformanceCounter callers pass through unchanged. The game's nominal 60-based simulation clock, original clock-update routine, physics constants, animation constants and global time values are not modified.
-
-The game's real swapchains are identified from its CreateSwapChain output array. Their Present entry is hooked to remove the VSync wait when requested and measure actual presentation rate. The previous Present function remains in the call chain. Dear ImGui renders through the game's actual D3D11 device and immediate context. Render state is restored, and backbuffer references are released before Present so they do not block resizing. A factory callback handles subsequent legacy swapchain recreation. There is no dummy swapchain or driver-wide detour.
-
-The x64 forwarding stubs preserve integer, floating-point and stack arguments. The proxy matches all **181 exports**, including names and ordinals, of the installed Windows x64 WINMM library. Real functions are loaded from the absolute Windows System32 path; no Windows DLL is redistributed or replaced. DllMain does not load modules, patch memory or wait.
-
-## Validation and limits
-
-Version 1.1 was launched through Steam and tested in one running session: F10 show/hide, 60/144/240/360 FPS presets, a custom 200 FPS limit applied with Enter, uncapped mode, VSync interval 0/1, live enable/disable, HUD with logging disabled, Save defaults, and Reload defaults. The original saved 360 FPS setting was restored. The clock remained nominally 60 with 60.0000 simulation units/sec. All 181 WINMM names/ordinals resolve and timer calls match the system DLL. Startup window resizing worked; fullscreen/device-loss stress testing was not performed.
-
-
-Verified here:
-
-* Earlier 1.0 verification: real Steam startup and the forwarding/scheduler checks below. Version 1.1 adds the live ImGui panel; see `research/overlay-validation.json` for its separate results.
-* On-screen counter showing 144 FPS and sustained logged measurements around 143–144 FPS.
-* Engine nominal rate remains 60; logged simulation normalization remains 60.0000 units/sec, with a frame delta near 0.006944 seconds at 144 FPS.
-* All 181 exported names/ordinals match and resolve. Time readings, timer-period calls, timer capabilities and a six-argument audio-format query match the real system DLL. The query opens no audio stream.
-* The game executable retains its original SHA256 hash. ModelRipper's `d3d11.dll` is absent.
-
-These checks verify the scheduler and startup/menu presentation. They do not establish that every combat mechanic, cutscene or multiplayer mode is free of frame-dependent behavior. Live limits are documented in the separate overlay validation report; exhaustive combat and multiplayer validation has not been performed.
-
-The validated executable build timestamp is `5DF36448`; the active executable's SHA256 is `57c866f551b86622e107ceeac7346519a2ffec252804bedbc292bfa5921ab4ea`. Both measured image layouts (sizes `0xC7F000` and `0xCAC000`) are recognized only if all required loaded-code signatures match. An updated game may require revisiting the patch. Other mods that replace the scheduler or these exact COM vtable entries can conflict.
-
-Research and test results are in `research/`. `CTE_FPSPatch.log` in the game folder is the live diagnostic log.
-
-## Build
-
-Run `build.cmd` with Visual Studio's Desktop C++ tools installed. It finds the x64 MSVC/MASM environment, compiles the patch with warnings treated as errors, and produces `build/winmm.dll`. Sources, the export definition and assembly forwarding stubs are included in `src/`. No third-party hooking library is required.
-
-Dear ImGui v1.91.9b is vendored in `third_party/imgui`, including its official Win32/D3D11 backends and MIT license. `SOURCE.json` records download URLs and hashes. The overlay uses no additional injection or hooking library.
-
-Version 1.2 input/cursor checks are in `research/input-cursor-validation.json`. Clicks, custom text entry, Enter/Apply, reload and cursor visibility were checked through Steam. Automated title dragging did not move the panel; dragging is not validated.
+The in-game panel is built with [**Dear ImGui**](https://github.com/ocornut/imgui) by Omar Cornut and contributors (version 1.91.9b), used under the MIT License. It is vendored in `third_party/imgui/` along with its license, and `SOURCE.json` records the download URLs and file hashes.
